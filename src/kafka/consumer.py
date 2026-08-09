@@ -12,22 +12,16 @@ import os
 TOPIC = "transactions"
 LIVE_DATA_PATH = "data/live_data.csv"
 
+
 # Load the trained model ONCE at startup - this is the real-time
 # inference step. Each incoming transaction event gets scored live,
 # it is NOT reading precomputed batch predictions.
+
 model = joblib.load("models/demand_model.pkl")
 scaler = joblib.load("models/scaler.pkl")
 
-# Historical average inventory_ratio per product, used as a stand-in
-# feature since a live transaction event doesn't carry true capacity
-# info. This mirrors what a real system would do: fall back to a
-# rolling/historical average when a live signal isn't available.
-#
-# create_feature.py (Spark) writes this as a FOLDER of part-*.csv files,
-# not a single "feature_dataset.csv" — reading that exact filename would
-# raise FileNotFoundError and crash the consumer before it even connects
-# to Kafka. This globs whichever part-file(s) exist instead.
-_part_files = glob.glob("data/final/feature_dataset/part-*.csv")
+
+_part_files = glob.glob("data/final/feature_dataset.csv")
 
 if not _part_files:
     raise FileNotFoundError(
@@ -153,6 +147,11 @@ def connect_consumer(retries=10, delay=5):
 if __name__ == "__main__":
 
     consumer = connect_consumer()
+    #consumer = KafkaConsumer(
+     #   TOPIC,
+      #  bootstrap_servers='kafka:29092',
+       # value_deserializer=lambda x: json.loads(x.decode())
+    #)
 
     for message in consumer:
 

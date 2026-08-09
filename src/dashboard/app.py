@@ -1,4 +1,3 @@
-import glob
 
 import streamlit as st
 import pandas as pd
@@ -24,34 +23,26 @@ st.title("AI Driven Dynamic Pricing Engine")
 # Load Data
 # --------------------------
 
-# optimize_price_spark.py writes this as a FOLDER of part-*.csv files, not
-# a single "optimized_prices.csv" — so it's read as a glob of part files
-# instead of one fixed filename.
-PRICING_DIR = "data/final/optimized_prices"
+PRICING_PATH = "data/final/optimized_prices.csv"
 LIVE_PATH = "data/live_data.csv"
-
-pricing_part_files = glob.glob(
-    os.path.join(PRICING_DIR, "part-*.csv")
-)
-
-if pricing_part_files:
-    pricing_df = pd.concat(
-        (pd.read_csv(f) for f in pricing_part_files),
-        ignore_index=True
+ 
+if os.path.exists(PRICING_PATH):
+    pricing_df = pd.read_csv(
+        PRICING_PATH
     )
 else:
     pricing_df = pd.DataFrame()
     st.error(
-        f"Could not find any part-*.csv files in `{PRICING_DIR}` (looked "
-        f"in `{os.path.abspath(PRICING_DIR)}`).\n\n"
+        f"Could not find `{PRICING_PATH}` (looked in "
+        f"`{os.path.abspath(PRICING_PATH)}`).\n\n"
         "Run these first, from THIS SAME folder, before launching Streamlit:\n"
-        "1. `spark-submit preprocess.py`\n"
-        "2. `spark-submit create_feature.py`\n"
+        "1. `python3 preprocess.py`\n"
+        "2. `python3 create_feature.py`\n"
         "3. `python3 train_xgboost.py`\n"
-        "4. `spark-submit optimize_price.py`\n\n"
-        "Then confirm with: `ls -la data/final/optimized_prices/`"
+        "4. `python3 optimize_price.py`\n\n"
+        "Then confirm with: `ls -la data/final/optimized_prices.csv`"
     )
-
+ 
 if os.path.exists(LIVE_PATH):
     live_df = pd.read_csv(
         LIVE_PATH
@@ -63,7 +54,7 @@ else:
         "This file only appears once Kafka is running and consumer.py has "
         "received at least one message (`docker compose up`)."
     )
-
+ 
 
 # --------------------------
 # KPIs

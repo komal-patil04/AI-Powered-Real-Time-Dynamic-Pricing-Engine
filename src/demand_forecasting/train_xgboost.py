@@ -1,7 +1,7 @@
-import glob
 
 import pandas as pd
 import joblib
+import os
 
 from xgboost import XGBRegressor
 from sklearn.model_selection import \
@@ -11,72 +11,67 @@ StandardScaler
 from sklearn.metrics import \
 mean_absolute_error
 
+# -----------------------------
+# 1. READ FEATURE DATASET
+# -----------------------------
 
-part_files = glob.glob(
-    "data/final/feature_dataset/part-*.csv"
-)
+df = pd.read_csv( "data/final/feature_dataset.csv" ) 
+print("Feature dataset loaded successfully!") 
+print("Rows:", len(df))
 
-if not part_files:
-    raise FileNotFoundError(
-        "No part files found in data/final/feature_dataset/ — "
-        "has create_feature.py been run yet?"
-    )
 
-df = pd.concat(
-    (pd.read_csv(f) for f in part_files),
-    ignore_index=True
-)
+# -----------------------------
+# 2. SELECT FEATURES
+# -----------------------------
 
-X = df[
-
-    [
-
-        "current_price",
-        "inventory_level",
-        "discount_pct",
-        "profit_margin",
-        "avg_price_elasticity",
-        "inventory_risk",
-        "weekend",
-        "day_of_week",
-        "month",
-        "inventory_ratio",
-        "profit_per_unit"
-
-    ]
+feature_cols = [
+    "current_price",
+    "inventory_level",
+    "discount_pct",
+    "profit_margin",
+    "avg_price_elasticity",
+    "inventory_risk",
+    "weekend",
+    "day_of_week",
+    "month",
+    "inventory_ratio",
+    "profit_per_unit"
 ]
+
+X = df[feature_cols]
 
 y = df["units_sold"]
 
-X_train, X_test, y_train, y_test = \
-train_test_split(
+# -----------------------------
+# 3. TRAIN TEST SPLIT
+# -----------------------------
 
+X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
     test_size=0.2,
     random_state=42
 )
 
+# -----------------------------
+# 4. SCALE FEATURES
+# -----------------------------
+
 scaler = StandardScaler()
 
-X_train = scaler.fit_transform(
-    X_train
-)
+X_train = scaler.fit_transform(X_train)
 
-X_test = scaler.transform(
-    X_test
-)
+X_test = scaler.transform(X_test)
+
+# -----------------------------
+# 5. TRAIN XGBOOST
+# -----------------------------
 
 model = XGBRegressor(
-
     n_estimators=200,
-
     max_depth=8,
-
     learning_rate=0.05,
-
     random_state=42
-
 )
 
 model.fit(
@@ -84,9 +79,11 @@ model.fit(
     y_train
 )
 
-predictions = model.predict(
-    X_test
-)
+# -----------------------------
+# 6. EVALUATE MODEL
+# -----------------------------
+
+predictions = model.predict(X_test)
 
 mae = mean_absolute_error(
     y_test,
@@ -95,16 +92,17 @@ mae = mean_absolute_error(
 
 print("MAE:", mae)
 
-joblib.dump(
 
-    model,
+# -------------------------------------------------- 
+#  7. CREATE MODELS FOLDER 
+# -------------------------------------------------- 
+os.makedirs( "models", exist_ok=True ) 
 
-    "models/demand_model.pkl"
-)
-
-joblib.dump(
-
-    scaler,
-
-    "models/scaler.pkl"
-)
+# -------------------------------------------------- 
+# # 8. SAVE MODEL 
+# # -------------------------------------------------- 
+joblib.dump( model, "models/demand_model.pkl" ) 
+joblib.dump( scaler, "models/scaler.pkl" ) 
+print("Model training completed!") 
+print("Model saved to models/demand_model.pkl") 
+print("Scaler saved to models/scaler.pkl")

@@ -1,115 +1,126 @@
-import sys
+import pandas as pd
+import glob
 import os
 
-# Pin the Spark worker subprocess to this exact Python executable (the
-# active venv) rather than letting it resolve "python" via PATH, which can
-# find a different system-wide Python version on Windows. Not strictly
-# required here (no pandas_udf in this script), but kept consistent with
-# optimize_price.py to avoid the same class of bug if one is added later.
-os.environ["PYSPARK_PYTHON"] = sys.executable
-os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+# -----------------------------------
+# 1. READ MASTER DATASET
+# -----------------------------------
 
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
-
-spark = SparkSession.builder.appName("FeatureEngineering").getOrCreate()
-
-# NOTE: master_dataset.csv is written by Spark as a directory of part-files
-# (see preprocessing_spark.py), so it's read here the same way — Spark
-# transparently reads all part-files in the directory as one DataFrame.
-df = spark.read.csv(
-    "data/processed/master_dataset",
-    header=True,
-    inferSchema=True
+files = glob.glob(
+    "data/processed/master_dataset/part-*.csv"
 )
 
-# time-based features
-df = df.withColumn("date", F.to_date(F.col("date")))
+if not files:
+    raise FileNotFoundError(
+        "No master dataset found. "
+        "Run preprocessing_spark.py first."
+    )
 
-df = df.withColumn("day", F.dayofmonth(F.col("date")))
-
-df = df.withColumn("month", F.month(F.col("date")))
-
-# pandas dayofweek: Monday=0 ... Sunday=6
-# Spark's dayofweek(): Sunday=1 ... Saturday=7, so it's remapped to match
-df = df.withColumn(
-    "day_of_week",
-    (F.dayofweek(F.col("date")) + 5) % 7
+df = pd.concat(
+    [pd.read_csv(file) for file in files],
+    ignore_index=True
 )
 
-df = df.withColumn(
-    "weekend",
-    (F.col("day_of_week") >= 5).cast("int")
+# -----------------------------------
+# 2. DATE FEATURES
+# -----------------------------------
+
+df["date"] = pd.to_datetime(df["date"])
+
+df["day"] = df["date"].dt.day
+
+df["month"] = df["date"].dt.month
+
+# Monday = 0, Sunday = 6
+df["day_of_week"] = df["date"].dt.dayofweek
+
+df["weekend"] = (
+    df["day_of_week"] >= 5
+).astype(int)
+
+# -----------------------------------
+# 3. PRICE FEATURES
+# -----------------------------------
+
+df["discount"] = (
+    df["base_price"] -
+    df["current_price"]
 )
 
-# price features
-df = df.withColumn(
-    "discount",
-    F.col("base_price") - F.col("current_price")
+df["discount_pct"] = (
+    df["discount"] /
+    df["base_price"]
+) * 100
+
+df["discount_pct"] = df["discount_pct"].fillna(0)
+
+# -----------------------------------
+# 4. INVENTORY FEATURES
+# -----------------------------------
+
+df["low_stock"] = (
+    df["inventory_level"] < 20
+).astype(int)
+
+# Historical average units sold
+# for each product
+
+df = df.sort_values(
+    ["product_id", "date"]
 )
 
-df = df.withColumn(
-    "discount_pct",
-    (F.col("discount") / F.col("base_price")) * 100
-)
-
-# inventory features
-df = df.withColumn(
-    "low_stock",
-    (F.col("inventory_level") < 20).cast("int")
-)
-
-# LEAKAGE FIX: the original inventory_ratio = units_sold / (inventory_level+1)
-# used the SAME ROW's units_sold — the exact value being predicted — so the
-# model was trivially "reversing" its own target instead of forecasting it
-# (this produced an unrealistically low MAE of ~0.06).
-#
-# Fixed version uses each product's HISTORICAL average units_sold, computed
-# only from rows strictly before the current one (ordered by date). This
-# mirrors what's actually knowable at prediction time — you never know
-# today's units_sold in advance — and matches the historical-average
-# fallback consumer.py already uses for live scoring.
-product_window = Window.partitionBy("product_id") \
-    .orderBy("date") \
-    .rowsBetween(Window.unboundedPreceding, -1)
-
-df = df.withColumn(
-    "avg_past_units_sold",
-    F.avg("units_sold").over(product_window)
-)
-
-df = df.withColumn(
-    "inventory_ratio",
-    F.coalesce(
-        F.col("avg_past_units_sold") / (F.col("inventory_level") + 1),
-        F.lit(0.0)
+df["avg_past_units_sold"] = (
+    df.groupby("product_id")["units_sold"]
+    .transform(
+        lambda x: x.shift(1).expanding().mean()
     )
 )
 
-df = df.drop("avg_past_units_sold")
-
-# profit features
-df = df.withColumn(
-    "profit_per_unit",
-    F.col("current_price") - F.col("cost_price")
+df["inventory_ratio"] = (
+    df["avg_past_units_sold"] /
+    (df["inventory_level"] + 1)
 )
 
-# elasticity features
-df = df.withColumn(
-    "high_elasticity",
-    (F.col("avg_price_elasticity") < -1).cast("int")
+df["inventory_ratio"] = (
+    df["inventory_ratio"]
+    .fillna(0)
 )
 
-# demand features
-df = df.withColumn(
-    "high_sales",
-    (F.col("units_sold") > 100).cast("int")
+df = df.drop(
+    columns=["avg_past_units_sold"]
 )
 
-# final feature columns
-# (kept as in the original — defined but not applied as a df.select())
-features = [
+# -----------------------------------
+# 5. PROFIT FEATURES
+# -----------------------------------
+
+df["profit_per_unit"] = (
+    df["current_price"] -
+    df["cost_price"]
+)
+
+# -----------------------------------
+# 6. ELASTICITY FEATURES
+# -----------------------------------
+df["avg_price_elasticity"] = ( df["avg_price_elasticity"].fillna(0) )
+
+df["high_elasticity"] = (
+    df["avg_price_elasticity"] < -1
+).astype(int)
+
+# -----------------------------------
+# 7. DEMAND FEATURES
+# -----------------------------------
+
+df["high_sales"] = (
+    df["units_sold"] > 100
+).astype(int)
+
+# -----------------------------------
+# 8. SELECT MODEL FEATURES
+# -----------------------------------
+
+feature_cols = [
     "current_price",
     "inventory_level",
     "discount_pct",
@@ -123,8 +134,32 @@ features = [
     "profit_per_unit"
 ]
 
-df.coalesce(1).write.mode("overwrite").option(
-    "header", True
-).csv("data/final/feature_dataset")
+# Keep target + model features
+feature_df = df[
+    ["product_id", "units_sold"] + feature_cols
+]
 
-spark.stop()
+# -----------------------------------
+# 9. SAVE FEATURE DATASET
+# -----------------------------------
+
+os.makedirs(
+    "data/final",
+    exist_ok=True
+)
+
+feature_df.to_csv(
+    "data/final/feature_dataset.csv",
+    index=False
+)
+
+print("Feature engineering completed!")
+
+print(
+    "Feature dataset shape:",
+    feature_df.shape
+)
+
+print(
+    feature_df.head()
+)
