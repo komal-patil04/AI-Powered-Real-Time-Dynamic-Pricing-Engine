@@ -1,3 +1,4 @@
+import glob
 import time
 time.sleep(20)
 
@@ -21,7 +22,24 @@ scaler = joblib.load("models/scaler.pkl")
 # feature since a live transaction event doesn't carry true capacity
 # info. This mirrors what a real system would do: fall back to a
 # rolling/historical average when a live signal isn't available.
-_feat_df = pd.read_csv("data/final/feature_dataset.csv")
+#
+# create_feature.py (Spark) writes this as a FOLDER of part-*.csv files,
+# not a single "feature_dataset.csv" — reading that exact filename would
+# raise FileNotFoundError and crash the consumer before it even connects
+# to Kafka. This globs whichever part-file(s) exist instead.
+_part_files = glob.glob("data/final/feature_dataset/part-*.csv")
+
+if not _part_files:
+    raise FileNotFoundError(
+        "No part files found in data/final/feature_dataset/ — "
+        "has create_feature.py been run yet?"
+    )
+
+_feat_df = pd.concat(
+    (pd.read_csv(f) for f in _part_files),
+    ignore_index=True
+)
+
 avg_inventory_ratio_by_product = (
     _feat_df.groupby("product_id")["inventory_ratio"].mean().to_dict()
 )
@@ -135,11 +153,6 @@ def connect_consumer(retries=10, delay=5):
 if __name__ == "__main__":
 
     consumer = connect_consumer()
-    #consumer = KafkaConsumer(
-     #   TOPIC,
-      #  bootstrap_servers='kafka:29092',
-       # value_deserializer=lambda x: json.loads(x.decode())
-    #)
 
     for message in consumer:
 
