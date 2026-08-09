@@ -1,3 +1,5 @@
+import glob
+
 import pandas as pd
 import joblib
 
@@ -9,9 +11,20 @@ StandardScaler
 from sklearn.metrics import \
 mean_absolute_error
 
-df = pd.read_csv(
 
-    "data/final/feature_dataset.csv"
+part_files = glob.glob(
+    "data/final/feature_dataset/part-*.csv"
+)
+
+if not part_files:
+    raise FileNotFoundError(
+        "No part files found in data/final/feature_dataset/ — "
+        "has create_feature.py been run yet?"
+    )
+
+df = pd.concat(
+    (pd.read_csv(f) for f in part_files),
+    ignore_index=True
 )
 
 X = df[
@@ -95,4 +108,3 @@ joblib.dump(
 
     "models/scaler.pkl"
 )
-
